@@ -24,6 +24,19 @@ pub struct VmConfig {
     /// Additional virtio-blk disks, attached after system and data (so `/dev/vdc`, ...).
     #[serde(default)]
     pub extra_disks: Vec<DiskSpec>,
+    #[serde(default)]
+    pub net: NetMode,
+}
+
+/// How the guest reaches the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NetMode {
+    /// moniqi acts as the gateway in-process (follows the host's routing, VPN and proxy).
+    #[default]
+    User,
+    /// macOS's kernel NAT (`VZNATNetworkDeviceAttachment`); bypassed by some TUN-mode VPNs.
+    Nat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +60,7 @@ impl VmConfig {
             console_log: dir.join("console.log"),
             balloon: true,
             extra_disks: Vec::new(),
+            net: NetMode::default(),
         }
     }
 

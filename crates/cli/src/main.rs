@@ -74,6 +74,10 @@ enum Cmd {
         /// Display refresh rate in Hz (5-60). Software rendering costs CPU per frame.
         #[arg(long)]
         fps: Option<u32>,
+        /// Guest networking: `user` (default; moniqi is the gateway and follows the host's
+        /// VPN/proxy) or `nat` (macOS kernel NAT)
+        #[arg(long)]
+        net: Option<String>,
     },
     /// Download the Android (redroid) image and attach it to the VM as a read-only disk
     PullAndroid {
@@ -288,7 +292,7 @@ fn main() -> Result<()> {
                 bail!("{failed} of {} installs failed", apks.len());
             }
         }
-        Cmd::Config { name, memory_mib, cpus, trim, resolution, dpi, fps } => {
+        Cmd::Config { name, memory_mib, cpus, trim, resolution, dpi, fps, net } => {
             let path = vm_dir(&name)?.join("vm.json");
             let mut cfg = VmConfig::load(&path)?;
             if let Some(m) = memory_mib {
@@ -320,6 +324,13 @@ fn main() -> Result<()> {
             }
             if let Some(d) = dpi {
                 set_flag(&mut cfg.cmdline, "moniqi.dpi", d.to_string());
+            }
+            if let Some(n) = net {
+                cfg.net = match n.as_str() {
+                    "user" => moniqi_vmm::config::NetMode::User,
+                    "nat" => moniqi_vmm::config::NetMode::Nat,
+                    other => bail!("--net must be `user` or `nat`, not `{other}`"),
+                };
             }
             if let Some(f) = fps {
                 if !(5..=60).contains(&f) {

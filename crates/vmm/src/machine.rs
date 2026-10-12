@@ -24,6 +24,39 @@ pub struct Machine {
     save_restore_err: Option<String>,
 }
 
+/// A datagram socketpair: one end is the guest NIC, the other is served by `moniqi_netstack`.
+fn user_net_attachment() -> Result<Retained<objc2_virtualization::VZFileHandleNetworkDeviceAttachment>> {
+    use objc2_foundation::NSFileHandle;
+    use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: fds has room for the two descriptors socketpair(2) writes.
+    if unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_DGRAM, 0, fds.as_mut_ptr()) } != 0 {
+        bail!("socketpair: {}", std::io::Error::last_os_error());
+    }
+    // Apple recommends a large send buffer and a ~4x larger receive buffer on a NIC socket.
+    for fd in fds {
+        for (opt, size) in [(libc::SO_SNDBUF, 1 << 20), (libc::SO_RCVBUF, 4 << 20)] {
+            let v: libc::c_int = size;
+            // SAFETY: valid fd, int option value.
+            unsafe {
+                libc::setsockopt(fd, libc::SOL_SOCKET, opt, (&v as *const libc::c_int).cast(), std::mem::size_of::<libc::c_int>() as u32)
+            };
+        }
+    }
+    // SAFETY: both descriptors are fresh and owned here.
+    let host = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    moniqi_netstack::spawn(host).map_err(|e| anyhow!("start user-mode network: {e}"))?;
+    unsafe {
+        let fh = NSFileHandle::initWithFileDescriptor_closeOnDealloc(NSFileHandle::alloc(), fds[1].into_raw_fd(), true);
+        let att = objc2_virtualization::VZFileHandleNetworkDeviceAttachment::initWithFileHandle(
+            objc2_virtualization::VZFileHandleNetworkDeviceAttachment::alloc(),
+            &fh,
+        );
+        att.setMaximumTransmissionUnit(1500);
+        Ok(att)
+    }
+}
+
 fn url(p: &std::path::Path) -> Retained<NSURL> {
     NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy()))
 }
@@ -87,7 +120,13 @@ impl Machine {
 
             // Network: NAT.
             let net = VZVirtioNetworkDeviceConfiguration::new();
-            net.setAttachment(Some(&VZNATNetworkDeviceAttachment::new()));
+            match cfg.net {
+                crate::config::NetMode::Nat => net.setAttachment(Some(&VZNATNetworkDeviceAttachment::new())),
+                crate::config::NetMode::User => {
+                    let att = user_net_attachment()?;
+                    net.setAttachment(Some(&att))
+                }
+            }
             c.setNetworkDevices(&NSArray::from_retained_slice(&[Retained::into_super(net)]));
 
             // Serial console -> file.

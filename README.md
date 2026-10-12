@@ -54,3 +54,16 @@ The default is 30 fps; 60 fps with software encoding saturates the CPU and is no
 Config changes that touch the guest agent need `build-image` re-run.
 
 adb is forwarded to `127.0.0.1:5555`.
+
+## Networking
+
+By default the guest uses **user-mode networking** (like QEMU's slirp / the Android Studio
+emulator): `moniqi` itself is the gateway (`10.0.2.2`, guest `10.0.2.15`, DNS `10.0.2.3`),
+answers DHCP, forwards DNS/UDP and proxies every TCP connection through an ordinary host
+socket. Guest traffic therefore follows the Mac's own routing, VPN and proxy settings, and
+no entitlement or root is needed. Limits: ICMP ping only works to the gateway, and the guest
+isn't reachable from the LAN.
+
+`moniqi config dev --net nat` switches to macOS's kernel NAT instead. That one is bypassed by
+TUN-mode VPNs/proxies (guest packets are forwarded into the tunnel and never answered).
+Set `MONIQI_NET_DEBUG=1` to log every frame the network thread handles.
