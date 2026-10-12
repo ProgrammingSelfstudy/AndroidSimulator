@@ -19,6 +19,12 @@ The guest PID 1 and agent are static Linux binaries, cross-compiled with `rust-l
 scripts/build-guest.sh              # this Mac's arch; pass arm64 or x86_64 to choose
 ```
 
+## Package for an Apple silicon Mac
+
+```sh
+scripts/package-m3.sh        # dist/moniqi-m3.tar.gz: arm64 binary, aarch64 guest, setup/start scripts
+```
+
 ## Quick start
 
 ```sh
