@@ -1,0 +1,12 @@
+[package]
+name = "moniqi-guest-init"
+version.workspace = true
+edition.workspace = true
+description = "PID 1 for the moniqi guest (static aarch64-linux-musl)"
+
+[[bin]]
+name = "moniqi-init"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"

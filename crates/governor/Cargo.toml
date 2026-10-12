@@ -1,0 +1,7 @@
+[package]
+name = "moniqi-governor"
+version.workspace = true
+edition.workspace = true
+description = "Memory policy: decide how much RAM the host should keep resident for the guest"
+
+[dependencies]

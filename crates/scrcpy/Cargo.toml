@@ -1,0 +1,7 @@
+[package]
+name = "moniqi-scrcpy"
+version.workspace = true
+edition.workspace = true
+description = "scrcpy v5 wire protocol: video stream parsing and control message encoding"
+
+[dependencies]

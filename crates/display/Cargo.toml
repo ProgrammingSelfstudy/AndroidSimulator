@@ -1,0 +1,14 @@
+[package]
+name = "moniqi-display"
+version.workspace = true
+edition.workspace = true
+description = "macOS window that shows the guest's scrcpy H.264 stream and forwards input"
+
+[dependencies]
+moniqi-scrcpy = { path = "../scrcpy" }
+anyhow = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSDate", "NSGeometry", "NSRunLoop", "NSObject", "NSArray", "NSURL"] }
+objc2-app-kit = "0.3"

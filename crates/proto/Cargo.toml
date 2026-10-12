@@ -1,0 +1,8 @@
+[package]
+name = "moniqi-proto"
+version.workspace = true
+edition.workspace = true
+description = "Shared host<->guest constants and byte relay"
+
+[dependencies]
+libc = "0.2"

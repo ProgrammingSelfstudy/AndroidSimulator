@@ -1,0 +1,13 @@
+[package]
+name = "moniqi-guest-agent"
+version.workspace = true
+edition.workspace = true
+description = "Guest-side agent: vsock services and the Android container"
+
+[[bin]]
+name = "moniqi-agent"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+moniqi-proto = { path = "../proto" }

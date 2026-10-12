@@ -1,0 +1,16 @@
+[package]
+name = "moniqi-image"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "3"
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+ar = "0.9"
+zstd = "0.13"
+moniqi-proto = { path = "../proto" }
