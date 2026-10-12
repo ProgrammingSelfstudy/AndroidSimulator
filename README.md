@@ -74,6 +74,21 @@ isn't reachable from the LAN.
 TUN-mode VPNs/proxies (guest packets are forwarded into the tunnel and never answered).
 Set `MONIQI_NET_DEBUG=1` to log every frame the network thread handles.
 
+## Audio HAL path-check patch (security note)
+
+On x86 guests, AudioFlinger could not load `audio.primary` / `r_submix` from `/vendor/lib/hw`:
+the 32-bit `libhardware.so` rejected the module path in its "trusted HAL directory" check
+(root cause not found), leaving no output thread and a null `OUTPUT_SAMPLE_RATE`.
+
+At every boot the guest agent copies the image's VNDK `libhardware.so` to
+`/vendor/lib/libhardware.so` in the overlay with that one check **made to always return true**
+(3 bytes at the function entry: `55 89 e5` -> `b0 01 c3`). This relaxes the check for every
+module path in 32-bit processes that use this library, not only `/vendor/lib/hw`. The agent only
+patches an ELF32/x86 file in which the known function prologue matches exactly once; otherwise
+it patches nothing and removes any stale copy. The image itself stays unmodified.
+
+To undo on a running instance: `adb shell su 0 rm /vendor/lib/libhardware.so`, then restart.
+
 ## Flutter apps on Intel
 
 Arm64-only Flutter apps run through the guest's ARM translator. Those that opt out of Impeller

@@ -255,7 +255,62 @@ on init
 fn install_overrides(root: &str) -> io::Result<()> {
     let dir = format!("{root}/vendor/etc/init");
     fs::create_dir_all(&dir)?;
-    fs::write(format!("{dir}/moniqi.rc"), OVERRIDES_RC)
+    fs::write(format!("{dir}/moniqi.rc"), OVERRIDES_RC)?;
+    if let Err(e) = install_hal_path_patch(root) {
+        log(&format!("audio HAL path patch: {e}"));
+    }
+    Ok(())
+}
+
+/// Where the VNDK copy of the 32-bit x86 libhardware lives in the (flattened) APEX, and where
+/// the patched copy goes. /vendor/lib precedes the VNDK APEX in the vendor linker namespace, so
+/// the HAL services pick the patched one up while the read-only image stays untouched.
+const LIBHARDWARE_SRC: &str = "system/apex/com.android.vndk.current/lib/libhardware.so";
+const LIBHARDWARE_DST: &str = "vendor/lib/libhardware.so";
+
+/// Prologue of libhardware's "is this module path under a trusted HAL directory" check, and the
+/// replacement for its first three bytes (`mov al,1; ret`).
+const PATH_CHECK_PROLOGUE: [u8; 16] =
+    [0x55, 0x89, 0xe5, 0x53, 0x57, 0x56, 0x83, 0xe4, 0xf0, 0x81, 0xec, 0x10, 0x20, 0x00, 0x00, 0x89];
+const PATH_CHECK_ALWAYS_TRUE: [u8; 3] = [0xb0, 0x01, 0xc3];
+
+/// Audio HAL loading fails in this guest: libhardware's trusted-path check on
+/// /vendor/lib/hw/audio.*.so reports "untrusted" (cause not found), so AudioFlinger gets no
+/// primary module, no output thread, and OUTPUT_SAMPLE_RATE stays null. This makes that check
+/// return true unconditionally in the 32-bit x86 copy (it is NOT limited to /vendor/lib/hw).
+/// Applied only when the source is an ELF32/x86 file with exactly one match of the known
+/// prologue; otherwise nothing is patched and a stale copy in the persistent overlay is removed.
+fn install_hal_path_patch(root: &str) -> io::Result<()> {
+    let dst = format!("{root}/{LIBHARDWARE_DST}");
+    let mut lib = match fs::read(format!("{root}/{LIBHARDWARE_SRC}")) {
+        Ok(l) => l,
+        Err(e) => {
+            let _ = fs::remove_file(&dst);
+            return Err(e);
+        }
+    };
+    let is_elf32_x86 = lib.len() > 20 && lib[..4] == *b"\x7fELF" && lib[4] == 1 && lib[18] == 3 && lib[19] == 0;
+    let hits: Vec<usize> = if is_elf32_x86 {
+        lib.windows(PATH_CHECK_PROLOGUE.len())
+            .enumerate()
+            .filter(|(_, w)| *w == PATH_CHECK_PROLOGUE)
+            .map(|(i, _)| i)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if hits.len() != 1 {
+        let _ = fs::remove_file(&dst);
+        return Err(io::Error::other(format!(
+            "libhardware not recognised (elf32/x86={is_elf32_x86}, {} matches); not patching",
+            hits.len()
+        )));
+    }
+    lib[hits[0]..hits[0] + 3].copy_from_slice(&PATH_CHECK_ALWAYS_TRUE);
+    fs::create_dir_all(format!("{root}/vendor/lib"))?;
+    fs::write(&dst, &lib)?;
+    log(&format!("patched libhardware path check at {:#x} -> /{LIBHARDWARE_DST}", hits[0]));
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
