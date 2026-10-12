@@ -488,6 +488,10 @@ fn start(name: &str, persist: bool, extra: Vec<String>, no_defaults: bool, windo
     let mut last_stats = std::time::Instant::now();
     let (install_tx, install_rx) = std::sync::mpsc::channel::<(String, Result<String, String>)>();
     let mut title_reset_at: Option<std::time::Instant> = None;
+    // Installs in flight: label -> start time. A repeated drop of the same file is ignored, and
+    // the title shows elapsed seconds so a long install doesn't look hung.
+    let mut installing: std::collections::HashMap<String, std::time::Instant> = Default::default();
+    let mut install_tick: u64 = u64::MAX;
     let base_title = format!("moniqi — {name}");
     // The window stays black until Android has booted and the first frame arrives (~15 s):
     // say so in the title bar, with a running count, instead of looking hung.
@@ -555,6 +559,12 @@ fn start(name: &str, persist: bool, extra: Vec<String>, no_defaults: bool, windo
         if let Some(d) = display.as_ref() {
             for apk in d.take_dropped() {
                 let label = apk.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                if installing.contains_key(&label) {
+                    d.set_title(&format!("{base_title} — already installing {label}"));
+                    title_reset_at = Some(std::time::Instant::now() + Duration::from_secs(3));
+                    continue;
+                }
+                installing.insert(label.clone(), std::time::Instant::now());
                 d.set_title(&format!("{base_title} — installing {label}…"));
                 let tx = install_tx.clone();
                 std::thread::spawn(move || {
@@ -568,6 +578,7 @@ fn start(name: &str, persist: bool, extra: Vec<String>, no_defaults: bool, windo
                 title_reset_at = Some(std::time::Instant::now() + Duration::from_secs(6));
             }
             while let Ok((label, r)) = install_rx.try_recv() {
+                installing.remove(&label);
                 match r {
                     Ok(_) => {
                         println!("installed {label}");
@@ -580,7 +591,14 @@ fn start(name: &str, persist: bool, extra: Vec<String>, no_defaults: bool, windo
                 }
                 title_reset_at = Some(std::time::Instant::now() + Duration::from_secs(6));
             }
-            if title_reset_at.is_some_and(|t| std::time::Instant::now() >= t) {
+            if let Some((label, since)) = installing.iter().next() {
+                let secs = since.elapsed().as_secs();
+                if secs != install_tick {
+                    install_tick = secs;
+                    d.set_title(&format!("{base_title} — installing {label}… {secs}s"));
+                    title_reset_at = None;
+                }
+            } else if title_reset_at.is_some_and(|t| std::time::Instant::now() >= t) {
                 d.set_title(&base_title);
                 title_reset_at = None;
             }

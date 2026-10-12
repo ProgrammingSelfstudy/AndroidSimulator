@@ -89,6 +89,9 @@ const TRIM_PACKAGES: &[&str] = &[
     "com.android.statementservice",
     "com.android.cellbroadcastreceiver",
     "com.android.bluetoothmidiservice",
+    // No Bluetooth HAL in the guest: the stack aborts ("start the HAL before starting
+    // Bluetooth") and is restarted in a crash loop on every boot, each leaving a tombstone.
+    "com.android.bluetooth",
     "com.android.musicfx",
     "com.android.email",
     "com.android.soundrecorder",
