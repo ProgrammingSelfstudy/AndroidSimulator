@@ -110,6 +110,18 @@ pub fn run_in_container(cmd: &str) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Like [`run_in_container`] but long-running: returns the child (own process group).
+pub fn spawn_in_container(cmd: &str) -> io::Result<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    let pid = container_init_pid().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no running container"))?;
+    let mut c = Command::new("/usr/bin/nsenter");
+    c.args(["-t", &pid.to_string(), "-m", "-p", "-u", "-i", "--", "/system/bin/sh", "-c", cmd]);
+    if let Some(env) = android_env() {
+        c.env_clear().envs(env);
+    }
+    c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0).spawn()
+}
+
 /// The environment Android services run with (`BOOTCLASSPATH`, `ANDROID_ROOT`, ...). Android's
 /// init only injects these into services it starts, so a process entered via `nsenter` has to
 /// borrow them from a running one (zygote is the first that has `BOOTCLASSPATH`).

@@ -130,6 +130,51 @@ fn trim_when_booted() {
     }
 }
 
+/// Flutter apps that opt out of Impeller render through Skia's GL backend, which cannot start
+/// under the ARM translator here (ANGLE extension entry points are missing: "Failed to set up
+/// Skia Gr context", then a blank window). Impeller (Vulkan) works, and Flutter honours
+/// `--ez enable-impeller true` on the launch intent, so when that error shows up relaunch the
+/// app once with it. A launcher tap carries no such extra, hence the watcher.
+const FLUTTER_FALLBACK: &str = r#"
+logcat -v brief -T 1 'flutter:E' '*:S' | while read -r line; do
+  case "$line" in
+    *"Failed to set up Skia Gr context"*)
+      pid=$(echo "$line" | sed -n 's/^[A-Z]\/[^(]*( *\([0-9]*\)).*/\1/p')
+      pkg=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -d' ' -f1)
+      [ -n "$pkg" ] || continue
+      stamp=/data/local/tmp/.moniqi-impeller-$pkg
+      now=$(date +%s)
+      last=$(cat $stamp 2>/dev/null || echo 0)
+      [ $((now - last)) -ge 20 ] || continue
+      echo $now > $stamp
+      comp=$(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER $pkg | tail -1)
+      am force-stop $pkg
+      am start -n "$comp" --ez enable-impeller true >/dev/null 2>&1
+      ;;
+  esac
+done
+"#;
+
+fn flutter_gl_fallback() {
+    for _ in 0..240 {
+        thread::sleep(Duration::from_secs(1));
+        let done = crate::vsock::run_in_container("getprop sys.boot_completed").unwrap_or_default();
+        if done.trim() == "1" {
+            break;
+        }
+    }
+    log("flutter GL fallback watcher started");
+    loop {
+        match crate::vsock::spawn_in_container(FLUTTER_FALLBACK) {
+            Ok(mut child) => {
+                let _ = child.wait();
+            }
+            Err(e) => log(&format!("flutter fallback: {e}")),
+        }
+        thread::sleep(Duration::from_secs(5));
+    }
+}
+
 /// Agent side: prepare storage, then keep the container alive (no restart loop yet: a crashing
 /// Android should be visible, not hidden behind retries).
 pub fn start() {
@@ -139,6 +184,7 @@ pub fn start() {
         }
     });
     thread::spawn(trim_when_booted);
+    thread::spawn(flutter_gl_fallback);
 }
 
 fn run() -> io::Result<()> {

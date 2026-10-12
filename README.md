@@ -67,3 +67,10 @@ isn't reachable from the LAN.
 `moniqi config dev --net nat` switches to macOS's kernel NAT instead. That one is bypassed by
 TUN-mode VPNs/proxies (guest packets are forwarded into the tunnel and never answered).
 Set `MONIQI_NET_DEBUG=1` to log every frame the network thread handles.
+
+## Flutter apps on Intel
+
+Arm64-only Flutter apps run through the guest's ARM translator. Those that opt out of Impeller
+render with Skia's GL backend, which cannot start there ("Failed to set up Skia Gr context",
+blank window). The guest agent watches for that error and relaunches the app once with
+`--ez enable-impeller true`, so tapping the icon just works (a ~2 s extra on first launch).
