@@ -124,10 +124,44 @@ fn setup_net(opts: &Options) {
         log(&format!("no ethernet interface found (have: {all:?})"));
         return;
     };
+    // redroid's Ethernet service only manages `eth\d`; udev's predictable name (enp0s1) is
+    // invisible to it. Rename before anything configures the link.
+    let ifname = if ifname.starts_with("eth") {
+        ifname
+    } else {
+        let _ = net::link_down(&ifname);
+        match net::rename(&ifname, "eth0") {
+            Ok(()) => "eth0".to_string(),
+            Err(e) => {
+                log(&format!("rename {ifname} -> eth0: {e}"));
+                ifname
+            }
+        }
+    };
+    let ready = || {
+        let _ = fs::create_dir_all("/run/moniqi");
+        let _ = fs::write("/run/moniqi/net-ready", "1");
+    };
     match net::configure_dhcp(&ifname) {
-        Ok(l) => log(&format!("{ifname} {} gw {:?} dns {:?}", l.yiaddr, l.router, l.dns)),
+        Ok(l) => {
+            log(&format!("{ifname} {} gw {:?} dns {:?}", l.yiaddr, l.router, l.dns));
+            ready();
+        }
         Err(e) => {
             log(&format!("{ifname} dhcp: {e} ({})", net::dhcp_debug()));
+            // `moniqi.netdebug=1`: dump every frame seen for a few seconds after a DISCOVER.
+            let dbg = fs::read_to_string("/proc/cmdline").unwrap_or_default().contains("moniqi.netdebug=1");
+            if dbg {
+                for line in net::sniff_after_discover(&ifname, 8) {
+                    log(&format!("netdebug: {line}"));
+                }
+            }
+            // The host's NAT answers on the wire even when its DHCP server stays silent.
+            match net::mac(&ifname).and_then(|hw| net::static_fallback(&ifname, hw, Duration::from_secs(6))) {
+                Ok((ip, _, gw, _)) => log(&format!("{ifname} static {ip} gw {gw}")),
+                Err(e) => log(&format!("{ifname} static fallback: {e}")),
+            }
+            ready();
             let rd = |f: &str| {
                 fs::read_to_string(format!("/sys/class/net/{ifname}/{f}"))
                     .map(|s| s.trim().to_string())

@@ -15,7 +15,7 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::Command;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use moniqi_proto::{RunConfig, RUN_CONFIG_PATH};
 
@@ -179,6 +179,14 @@ fn run() -> io::Result<()> {
 
     install_overrides(&root)?;
 
+    // Android's Ethernet service reads the interface's address once at start-up, so the guest
+    // must have it configured first (init writes this flag; bounded so a missing NIC can't hang).
+    let net_wait = Instant::now();
+    while !Path::new("/run/moniqi/net-ready").exists() && net_wait.elapsed() < Duration::from_secs(25) {
+        thread::sleep(Duration::from_millis(100));
+    }
+    log(&format!("network ready={} after {} ms", Path::new("/run/moniqi/net-ready").exists(), net_wait.elapsed().as_millis()));
+
     log("starting container");
     let me = std::env::current_exe()?;
     let mut child = Command::new(me).arg("container").arg(&root).arg(format!("{data}/userdata")).spawn()?;
@@ -282,6 +290,18 @@ fn container_exec(root: &str, userdata: &str) -> io::Result<()> {
     // redroid's software-rendering default is a 15 Hz display, which is what makes the UI feel
     // laggy (every frame waits ~67 ms for the next vsync).
     let fps = cmdline_flag("moniqi.fps").unwrap_or_else(|| "30".into());
+    // Resolve through the address init configured (the host NAT's DNS proxy, or the DHCP
+    // lease's servers): redroid otherwise falls back to a hard-coded 8.8.8.8, which is
+    // unreachable behind some host VPN/TUN setups.
+    if let Some(dns) = fs::read_to_string("/run/moniqi/resolv.conf")
+        .ok()
+        .and_then(|t| t.lines().find_map(|l| l.strip_prefix("nameserver ").map(|v| v.trim().to_string())))
+    {
+        if !argv.iter().any(|a| a.starts_with("androidboot.redroid_net_dns1=")) {
+            argv.push("androidboot.redroid_net_ndns=1".to_string());
+            argv.push(format!("androidboot.redroid_net_dns1={dns}"));
+        }
+    }
     // Defaults only where the image doesn't already set them.
     for (k, v) in [
         ("androidboot.redroid_width", w.as_str()),

@@ -54,6 +54,31 @@ pub fn link_up(name: &str) -> io::Result<()> {
     })
 }
 
+/// Rename an interface (it must be down). redroid's Ethernet service only tracks `eth\d`.
+pub fn rename(old: &str, new: &str) -> io::Result<()> {
+    with_socket(|fd| {
+        let mut r = ifreq(old);
+        let n = new.as_bytes();
+        // SAFETY: the union member written is the one SIOCSIFNAME reads.
+        unsafe {
+            for (d, s) in r.ifr_ifru.ifru_newname.iter_mut().zip(n.iter().chain(std::iter::once(&0))) {
+                *d = *s as libc::c_char;
+            }
+        }
+        ioctl(fd, libc::SIOCSIFNAME as _, &mut r)
+    })
+}
+
+pub fn link_down(name: &str) -> io::Result<()> {
+    with_socket(|fd| {
+        let mut r = ifreq(name);
+        ioctl(fd, libc::SIOCGIFFLAGS as _, &mut r)?;
+        // SAFETY: SIOCGIFFLAGS filled the flags member of the union.
+        unsafe { r.ifr_ifru.ifru_flags &= !(libc::IFF_UP as libc::c_short) };
+        ioctl(fd, libc::SIOCSIFFLAGS as _, &mut r)
+    })
+}
+
 pub fn mac(name: &str) -> io::Result<[u8; 6]> {
     with_socket(|fd| {
         let mut r = ifreq(name);
@@ -192,7 +217,7 @@ impl Drop for PacketSock {
 
 fn exchange(tx: &UdpSocket, rx: &PacketSock, send: &[u8], xid: u32, want: u8) -> Option<Reply> {
     let dest = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, dhcp::SERVER_PORT));
-    for _ in 0..10 {
+    for _ in 0..3 {
         if tx.send_to(send, dest).is_err() {
             continue;
         }
@@ -352,4 +377,41 @@ pub fn sniff_after_discover(ifname: &str, secs: u64) -> Vec<String> {
     // SAFETY: fd owned here.
     unsafe { libc::close(fd) };
     out
+}
+
+/// Address a host-NAT guest by hand when DHCP gets no answer. macOS's NAT always puts the host
+/// on the bridge (default 192.168.64.1/24) and announces itself with mDNS/ICMP, so the first
+/// private-range IPv4 source heard on the wire is the gateway. Falls back to 192.168.64.1.
+/// Returns (our address, netmask, gateway, dns).
+pub fn static_fallback(ifname: &str, hw: [u8; 6], listen: Duration) -> io::Result<(Ipv4Addr, Ipv4Addr, Ipv4Addr, Ipv4Addr)> {
+    let rx = PacketSock::open(ifname)?;
+    let mut gw = None;
+    let end = std::time::Instant::now() + listen;
+    let mut buf = [0u8; 2048];
+    while gw.is_none() && std::time::Instant::now() < end {
+        // SAFETY: buf is a valid writable buffer of the given length.
+        let n = unsafe { libc::recv(rx.0, buf.as_mut_ptr().cast(), buf.len(), 0) };
+        if n < 20 {
+            continue;
+        }
+        let ip = &buf[..n as usize];
+        if ip[0] >> 4 != 4 {
+            continue;
+        }
+        let src = Ipv4Addr::new(ip[12], ip[13], ip[14], ip[15]);
+        if src.is_private() && !src.is_unspecified() {
+            gw = Some(src);
+        }
+    }
+    let gw = gw.unwrap_or(Ipv4Addr::new(192, 168, 64, 1));
+    let o = gw.octets();
+    // Stay clear of .0/.1/.255 and of the low addresses a DHCP pool hands out first.
+    let host = 100 + hw[5] % 100;
+    let ip = Ipv4Addr::new(o[0], o[1], o[2], if host == o[3] { host + 1 } else { host });
+    let mask = Ipv4Addr::new(255, 255, 255, 0);
+    set_addr(ifname, ip, mask)?;
+    add_default_route(ifname, gw)?;
+    let _ = std::fs::create_dir_all("/run/moniqi");
+    let _ = std::fs::write("/run/moniqi/resolv.conf", format!("nameserver {gw}\n"));
+    Ok((ip, mask, gw, gw))
 }
