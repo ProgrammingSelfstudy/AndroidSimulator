@@ -445,6 +445,15 @@ fn start(name: &str, persist: bool, extra: Vec<String>, no_defaults: bool, windo
     }
 
     let mut m = Machine::new(&cfg)?;
+    // Suspend-to-disk isn't available on every host/config; saving anyway aborts the process.
+    let persist = persist
+        && match m.save_restore_supported() {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("--persist ignored: this VM can't be saved on this Mac ({e}); it will shut down normally");
+                false
+            }
+        };
     if persist && state_file.exists() {
         println!("restoring {}", state_file.display());
         m.restore_state(&state_file)?;

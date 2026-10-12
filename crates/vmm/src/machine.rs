@@ -20,6 +20,8 @@ pub struct Machine {
     balloon: Option<Retained<VZVirtioTraditionalMemoryBalloonDevice>>,
     socket: Option<Retained<VZVirtioSocketDevice>>,
     memory_bytes: u64,
+    /// Why save/restore is unavailable for this configuration/host, if it is.
+    save_restore_err: Option<String>,
 }
 
 fn url(p: &std::path::Path) -> Retained<NSURL> {
@@ -114,7 +116,14 @@ impl Machine {
 
             c.validateWithError().map_err(ns_err)?;
             let vm = VZVirtualMachine::initWithConfiguration(VZVirtualMachine::alloc(), &c);
-            Ok(Self { vm, balloon: None, socket: None, memory_bytes: mem })
+            // Virtualization.framework only implements suspend-to-disk on Apple silicon; on Intel
+            // even asking raises an Objective-C exception (aborts the process), so don't ask.
+            let save_restore_err = if cfg!(target_arch = "aarch64") {
+                c.validateSaveRestoreSupportWithError().err().map(|e| e.localizedDescription().to_string())
+            } else {
+                Some("Virtualization.framework supports saving VM state only on Apple silicon".to_string())
+            };
+            Ok(Self { vm, balloon: None, socket: None, memory_bytes: mem, save_restore_err })
         }
     }
 
@@ -202,6 +211,14 @@ impl Machine {
     /// Ask the guest to shut down cleanly (ACPI-style power button).
     pub fn request_stop(&self) -> Result<()> {
         unsafe { self.vm.requestStopWithError().map_err(ns_err) }
+    }
+
+    /// `Ok` when suspend-to-disk works here; otherwise the framework's reason.
+    pub fn save_restore_supported(&self) -> Result<()> {
+        match &self.save_restore_err {
+            None => Ok(()),
+            Some(e) => bail!("{e}"),
+        }
     }
 
     pub fn save_state(&self, path: &std::path::Path) -> Result<()> {
