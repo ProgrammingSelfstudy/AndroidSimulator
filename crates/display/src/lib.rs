@@ -24,6 +24,18 @@ pub mod drop {
         p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("apk"))
     }
 
+    /// An APK whose browser/duplicate-renamed name hides the extension, e.g. `app.apk.1` or
+    /// `app (1).apk.download`: the name contains `.apk.` and the content is a zip.
+    pub fn is_renamed_apk(p: &Path) -> bool {
+        use std::io::Read;
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
+        if !name.contains(".apk.") || name.ends_with(".crdownload") || name.ends_with(".part") {
+            return false;
+        }
+        let mut magic = [0u8; 4];
+        std::fs::File::open(p).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && magic == *b"PK\x03\x04"
+    }
+
     /// Decode a `file://` URL string (as found on the pasteboard) to a path. Handles
     /// `file://localhost/...` and percent-escapes. Returns `None` for non-file URLs and for
     /// file-reference URLs (`/.file/id=...`), which only AppKit can resolve.
@@ -50,7 +62,7 @@ pub mod drop {
     }
 
     pub fn only_apks(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
-        paths.into_iter().filter(|p| is_apk(p)).collect()
+        paths.into_iter().filter(|p| is_apk(p) || is_renamed_apk(p)).collect()
     }
 
     #[cfg(test)]
@@ -66,6 +78,20 @@ pub mod drop {
             assert!(!is_apk(Path::new("/x/apk")));
             let v = only_apks(["/a.apk", "/b.txt", "/c.APK"].map(PathBuf::from));
             assert_eq!(v, vec![PathBuf::from("/a.apk"), PathBuf::from("/c.APK")]);
+        }
+
+        #[test]
+        fn accepts_renamed_apk_downloads() {
+            let d = std::env::temp_dir().join(format!("moniqi-drop-test-{}", std::process::id()));
+            std::fs::create_dir_all(&d).unwrap();
+            let zip = d.join("app (1).apk.1");
+            std::fs::write(&zip, b"PK\x03\x04rest").unwrap();
+            let txt = d.join("notes.apk.1");
+            std::fs::write(&txt, b"hello").unwrap();
+            let partial = d.join("app.apk.crdownload");
+            std::fs::write(&partial, b"PK\x03\x04").unwrap();
+            assert_eq!(only_apks([zip.clone(), txt, partial]), vec![zip]);
+            std::fs::remove_dir_all(&d).ok();
         }
 
         #[test]

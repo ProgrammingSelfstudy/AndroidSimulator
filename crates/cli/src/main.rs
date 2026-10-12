@@ -158,6 +158,18 @@ fn adb_install(apk: &Path) -> Result<String> {
     if !apk.is_file() {
         bail!("{} is not a file", apk.display());
     }
+    // adb wants an `.apk` name; a renamed download (`app.apk.1`) is staged under a proper one.
+    let staged;
+    let apk = if apk.extension().is_some_and(|e| e.eq_ignore_ascii_case("apk")) {
+        apk
+    } else {
+        let dir = std::env::temp_dir().join(format!("moniqi-install-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        staged = dir.join("app.apk");
+        let _ = std::fs::remove_file(&staged);
+        std::os::unix::fs::symlink(std::fs::canonicalize(apk)?, &staged)?;
+        &staged
+    };
     // Idempotent: a no-op when already connected.
     let _ = Command::new(&adb).args(["connect", ADB_SERIAL]).output();
     let out = Command::new(&adb)
@@ -468,6 +480,9 @@ fn start(name: &str, persist: bool, extra: Vec<String>, no_defaults: bool, windo
     let (install_tx, install_rx) = std::sync::mpsc::channel::<(String, Result<String, String>)>();
     let mut title_reset_at: Option<std::time::Instant> = None;
     let base_title = format!("moniqi — {name}");
+    // The window stays black until Android has booted and the first frame arrives (~15 s):
+    // say so in the title bar, with a running count, instead of looking hung.
+    let mut booting_secs: Option<u64> = Some(u64::MAX);
     let mut minimized_since: Option<std::time::Instant> = None;
     let mut paused_for_minimize = false;
 
@@ -513,6 +528,18 @@ fn start(name: &str, persist: bool, extra: Vec<String>, no_defaults: bool, windo
             }
             if d.is_closed() {
                 stop.store(true, Ordering::SeqCst); // closing the window shuts the VM down
+            }
+            if booting_secs.is_some() {
+                if d.is_connected() {
+                    booting_secs = None;
+                    d.set_title(&base_title);
+                } else {
+                    let secs = vm_started.elapsed().as_secs();
+                    if booting_secs != Some(secs) {
+                        booting_secs = Some(secs);
+                        d.set_title(&format!("{base_title} — starting Android… {secs}s"));
+                    }
+                }
             }
         }
         // APKs dropped on the window: install on a worker thread, report in the title bar.
