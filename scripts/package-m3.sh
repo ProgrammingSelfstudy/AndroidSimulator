@@ -23,7 +23,11 @@ cd "$(dirname "$0")"
 xattr -dr com.apple.quarantine . 2>/dev/null || true
 M=./bin/moniqi
 NAME="${1:-dev}"
-$M create "$NAME" --cpus 4 --memory-mib 2048 --disk-gib 16
+if [ -f "$HOME/.moniqi/$NAME/vm.json" ]; then
+  echo "VM '$NAME' already exists in ~/.moniqi/$NAME: reusing it (data disk is kept)."
+else
+  $M create "$NAME" --cpus 4 --memory-mib 2048 --disk-gib 16
+fi
 $M build-image "$NAME" --guest-init guest/moniqi-init --guest-agent guest/moniqi-agent
 $M pull-android "$NAME"
 $M config "$NAME" --resolution 540x960 --dpi 240 --fps 20 --trim on
